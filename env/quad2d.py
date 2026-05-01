@@ -69,9 +69,10 @@ class Quad2DEnv:
 
     def __init__(self, dt=1/60, max_episode_steps=360, seed=0,
                  ref_velocity=True, q_vel=5.0, action_penalty=1e-2,
-                 sdf_mode="baseline"):
+                 sdf_mode="baseline", crash_reward_penalty=500.0):
         self.dt = dt
         self.max_episode_steps = max_episode_steps
+        self.crash_reward_penalty = float(crash_reward_penalty)
 
         # SDF mode: controls _sdf() output shape (cost signal for critic)
         # All modes preserve sign(h) and the h=0 boundary, so binary_cost
@@ -106,8 +107,10 @@ class Quad2DEnv:
         # Q = diag(Q_pos, q_vel, Q_pos, q_vel, Q_angle, Q_angle)
         # RCRL paper: q_vel=1, action_penalty=1e-4
         # Our default: q_vel=5, action_penalty=1e-2
-        self.Q = np.diag([10.0, q_vel, 10.0, q_vel, 0.2, 0.2]).astype(np.float32)
-        self.R = np.diag([action_penalty, action_penalty]).astype(np.float32)
+        # self.Q = np.diag([10.0, q_vel, 10.0, q_vel, 0.2, 0.2]).astype(np.float32)
+        # self.R = np.diag([action_penalty, action_penalty]).astype(np.float32)
+        self.Q = np.diag([1.0, 0.1, 1.0, 0.1, 0.01, 0.01])
+        self.R = np.diag([1e-2, 1e-2])
         self.a_ref = np.array([0.5, 0.5], dtype=np.float32)  # hover
 
         # Spaces (action in [-1, 1], rescaled to [0, 1] internally)
@@ -303,18 +306,13 @@ class Quad2DEnv:
 
         # Termination
         terminated = bool(out_of_bounds)
-        
-        # if terminated:
-        #     # penalize crash
-        #     binary_cost += 10.0
-        #     reward -= 100.
-            
-        # binary_cost = float(np.clip(binary_cost, 0.0, 25.0))
-        # reward = float(np.clip(reward, -100.0, 0.0))
-        
         self._t += 1
         truncated = bool(self._t >= self.max_episode_steps)
         done = terminated or truncated
+
+        if terminated:
+            remaining_frac = (self.max_episode_steps - self._t) / float(self.max_episode_steps)
+            reward -= self.crash_reward_penalty * (1.0 + max(remaining_frac, 0.0))
         
         # if self._t < 5 or terminated or truncated:
         #     print(

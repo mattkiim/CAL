@@ -20,6 +20,14 @@ from arguments import readParser
 from agent.cal import CALAgent
 from env.quad2d import Quad2DEnv
 
+'''
+python eval/quad2d_eval.py \
+  --model_dir models/Quad2D_exp3 \
+  --suffix 4921_epoch950 \
+  --init_npz eval/quad2d_init_states.npz \
+  --out_dir eval_cal_quad2d_exp3_from_inits2 \
+'''
+
 
 EVAL_STARTS = np.array([
     [1.0, 0.0, 1.0, 0.0, 0.0, 0.0],
@@ -27,6 +35,34 @@ EVAL_STARTS = np.array([
     [0.0, 0.0, 0.53, 0.0, 0.0, 0.0],
     [0.0, 0.0, 1.47, 0.0, 0.0, 0.0],
 ], dtype=np.float32)
+
+
+def resolve_model_paths(model_dir: str, suffix: str | None):
+    """Find actor/critics/safetycritics in model_dir, optionally by suffix."""
+    if suffix is not None:
+        return (
+            os.path.join(model_dir, f"actor_{suffix}"),
+            os.path.join(model_dir, f"critics_{suffix}"),
+            os.path.join(model_dir, f"safetycritics_{suffix}"),
+            suffix,
+        )
+
+    # Auto-detect: find all actor_* files and pick the latest by mtime
+    candidates = [f for f in os.listdir(model_dir) if f.startswith("actor_")]
+    if not candidates:
+        raise FileNotFoundError(f"No actor_* files found in {model_dir}")
+
+    latest = max(candidates, key=lambda f: os.path.getmtime(os.path.join(model_dir, f)))
+    suffix = latest[len("actor_"):]  # strip "actor_" prefix
+    print(f"Auto-selected suffix: {suffix!r}")
+
+    return (
+        os.path.join(model_dir, f"actor_{suffix}"),
+        os.path.join(model_dir, f"critics_{suffix}"),
+        os.path.join(model_dir, f"safetycritics_{suffix}"),
+        suffix,
+    )
+
 
 def load_init_states(path: str, key: str, num_episodes: int | None):
     data = np.load(path)
@@ -90,9 +126,9 @@ def rollout_from_init_state(env, agent, init_state, seed: int):
         rewards.append(float(reward))
         costs.append(float(cost))
 
-    xs.append(float(env.state[0]))
-    zs.append(float(env.state[2]))
-    
+        xs.append(float(env.state[0]))
+        zs.append(float(env.state[2]))
+
     return {
         "states": np.asarray(states, dtype=np.float32),
         "refs": np.asarray(refs, dtype=np.float32),
@@ -149,9 +185,8 @@ def plot_rollouts(rollouts: List[Dict[str, np.ndarray]], out_path: str, best_n: 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--actor_path", required=True)
-    parser.add_argument("--critics_path", default=None)
-    parser.add_argument("--safetycritics_path", default=None)
+    parser.add_argument("--model_dir", required=True, help="e.g. models/Quad2D_exp1")
+    parser.add_argument("--suffix", default=None, help="e.g. 42_final or 42_epoch50. If omitted, picks latest.")
 
     parser.add_argument("--init_npz", default=None)
     parser.add_argument("--four_starts", action="store_true")
@@ -165,8 +200,6 @@ def main():
     os.makedirs(args_cli.out_dir, exist_ok=True)
 
     # Reuse CAL argument defaults so model architecture matches training.
-    import sys
-
     old_argv = sys.argv
     sys.argv = [sys.argv[0]]   # hide CLI args from readParser
     cal_args = readParser()
@@ -175,31 +208,38 @@ def main():
     cal_args.env_name = "Quad2D"
     cal_args.safetygym = True
     cal_args.constraint_type = "safetygym"
-    cal_args.cost_lim = 10
+    cal_args.cost_lim = 5
     cal_args.epoch_length = 360
 
     torch.manual_seed(args_cli.seed)
     np.random.seed(args_cli.seed)
 
     env = Quad2DEnv(seed=args_cli.seed)
-    
-    obs, _ = env.reset()
-    # for _ in range(200000):
-    #     action = env.action_space.sample()
-    #     obs, reward, cost, terminated, truncated, _ = env.step(action)
-    #     if terminated or truncated:
-    #         obs, _ = env.reset()
+    env.reset()
+
+    s_dim = env.observation_space.shape[0]
+    agent = CALAgent(s_dim, env.action_space, cal_args)
+
+    # Resolve checkpoint paths
+    actor_path, critics_path, safetycritics_path, suffix = resolve_model_paths(
+        args_cli.model_dir, args_cli.suffix
+    )
+
+    # Restore obs stats so the policy sees the same normalization as during training
+    stats_path = os.path.join(args_cli.model_dir, f"obs_stats_{suffix}.npz")
+    if os.path.exists(stats_path):
+        stats = np.load(stats_path)
+        env.set_obs_stats(stats["mean"], stats["var"], int(stats["count"]))
+        print(f"Loaded obs stats from {stats_path}")
+    else:
+        print(f"Warning: no obs stats at {stats_path}, normalizer starts fresh")
 
     env.set_eval_mode()
 
-    # env._normalize_obs = False
-    s_dim = env.observation_space.shape[0]
-
-    agent = CALAgent(s_dim, env.action_space, cal_args)
     agent.load_model(
-        actor_path=args_cli.actor_path,
-        critics_path=args_cli.critics_path,
-        safetycritics_path=args_cli.safetycritics_path,
+        actor_path=actor_path,
+        critics_path=critics_path,
+        safetycritics_path=safetycritics_path,
     )
     agent.train(False)
 
@@ -303,7 +343,8 @@ def main():
         "unweighted_action_error_mean": float(unweighted_action_error_means.mean()),
         "crash_rate": float(crashes.mean()),
         "episode_alt_violation_rate": episode_alt_violation_rate,
-        "actor_path": args_cli.actor_path,
+        "model_dir": args_cli.model_dir,
+        "suffix": suffix,
         "init_npz": args_cli.init_npz,
         "init_key": args_cli.init_key,
     }

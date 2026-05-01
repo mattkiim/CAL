@@ -1,0 +1,19 @@
+{
+  "num_episodes": 100,
+  "return_mean": -358.876708984375,
+  "return_std": 119.32884979248047,
+  "cost_sum_mean": 0.8999999761581421,
+  "cost_sum_std": 6.380438804626465,
+  "violation_rate_mean": 0.002948405686765909,
+  "length_mean": 350.9599914550781,
+  "weighted_state_error_mean": 0.9389905333518982,
+  "unweighted_state_error_mean": 1.8691641092300415,
+  "weighted_action_error_mean": 0.0004957423079758883,
+  "unweighted_action_error_mean": 0.04957423359155655,
+  "crash_rate": 0.029999999329447746,
+  "episode_alt_violation_rate": 0.02,
+  "model_dir": "models/Quad2D_quad2d_crash_penalty",
+  "suffix": "4921_epoch250",
+  "init_npz": "eval/quad2d_init_states.npz",
+  "init_key": "init_states"
+}

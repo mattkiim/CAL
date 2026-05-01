@@ -10,7 +10,9 @@ def get_threshold(env, constraint='velocity'):
                         'SafetyPointButton1-v0': 10,
                         'SafetyPointButton2-v0': 10,
                         'SafetyPointPush1-v0': 10,
-                        'Quad2D': 10,
+                        'Quad2D': 5,
+                        'Quad3D': 5,
+                        'F16': 10,
                       }
     elif constraint == 'velocity':
         thresholds = {'Ant-v3': 103.115,

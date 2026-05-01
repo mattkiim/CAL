@@ -109,6 +109,9 @@ class CALAgent(Agent):
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
+        grad_clip_norm = float(getattr(self.args, "grad_clip_norm", 0.0))
+        if grad_clip_norm > 0.0:
+            torch.nn.utils.clip_grad_norm_(self.critic.parameters(), grad_clip_norm)
         self.critic_optimizer.step()
 
 
@@ -119,8 +122,6 @@ class CALAgent(Agent):
             next_QCs = self.safety_critic_targets(next_state, next_action)
         next_QC_random_max = next_QCs[qc_idxs].max(dim=0, keepdim=True).values
 
-        if self.args.safetygym:
-            mask = torch.ones_like(mask).to(self.device)
         next_QC = next_QC_random_max.repeat(self.args.qc_ens_size, 1, 1) if self.args.intrgt_max else next_QCs
         target_QCs = cost[None, :, :].repeat(self.args.qc_ens_size, 1, 1) + \
                     (mask[None, :, :].repeat(self.args.qc_ens_size, 1, 1) * self.safety_discount * next_QC)
@@ -128,7 +129,22 @@ class CALAgent(Agent):
 
         self.safety_critic_optimizer.zero_grad()
         safety_critic_loss.backward()
+        if grad_clip_norm > 0.0:
+            torch.nn.utils.clip_grad_norm_(self.safety_critics.parameters(), grad_clip_norm)
         self.safety_critic_optimizer.step()
+
+        return {
+            "train/critic_loss": float(critic_loss.detach().cpu().item()),
+            "train/safety_critic_loss": float(safety_critic_loss.detach().cpu().item()),
+            "train/q_mean": float(torch.min(current_Q1, current_Q2).detach().mean().cpu().item()),
+            "train/q_abs_mean": float(torch.min(current_Q1, current_Q2).detach().abs().mean().cpu().item()),
+            "train/target_q_mean": float(target_Q.detach().mean().cpu().item()),
+            "train/target_q_abs_mean": float(target_Q.detach().abs().mean().cpu().item()),
+            "train/qc_mean": float(current_QCs.detach().mean().cpu().item()),
+            "train/qc_abs_mean": float(current_QCs.detach().abs().mean().cpu().item()),
+            "train/target_qc_mean": float(target_QCs.detach().mean().cpu().item()),
+            "train/target_qc_abs_mean": float(target_QCs.detach().abs().mean().cpu().item()),
+        }
 
 
     def update_actor(self, state, action_taken):
@@ -166,6 +182,9 @@ class CALAgent(Agent):
         # Optimize the policy
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
+        grad_clip_norm = float(getattr(self.args, "grad_clip_norm", 0.0))
+        if grad_clip_norm > 0.0:
+            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), grad_clip_norm)
         self.actor_optimizer.step()
 
         self.log_alpha_optimizer.zero_grad()
@@ -177,6 +196,19 @@ class CALAgent(Agent):
         lam_loss = torch.mean(self.lam * (self.target_cost - current_QC).detach())
         lam_loss.backward()
         self.log_lam_optimizer.step()
+
+        return {
+            "train/actor_loss": float(actor_loss.detach().cpu().item()),
+            "train/alpha_loss": float(alpha_loss.detach().cpu().item()),
+            "train/lam_loss": float(lam_loss.detach().cpu().item()),
+            "train/alpha": float(self.alpha.detach().cpu().item()),
+            "train/lam": float(self.lam.detach().cpu().item()),
+            "train/rect": float(self.rect.detach().cpu().item()),
+            "train/current_qc": float(current_QC.detach().mean().cpu().item()),
+            "train/actor_qc": float(actor_QC.detach().mean().cpu().item()),
+            "train/actor_q": float(actor_Q.detach().mean().cpu().item()),
+            "train/log_prob": float(log_prob.detach().mean().cpu().item()),
+        }
 
 
     def update_parameters(self, memory, updates):
@@ -190,29 +222,42 @@ class CALAgent(Agent):
         reward_batch = torch.FloatTensor(reward_batch[:, 0]).to(self.device).unsqueeze(1)
         mask_batch = torch.FloatTensor(mask_batch).to(self.device).unsqueeze(1)
 
-        self.update_critic(state_batch, action_batch, reward_batch, cost_batch, next_state_batch, mask_batch)
-        self.update_actor(state_batch, action_batch)
+        critic_metrics = self.update_critic(
+            state_batch,
+            action_batch,
+            reward_batch,
+            cost_batch,
+            next_state_batch,
+            mask_batch,
+        )
+        actor_metrics = self.update_actor(state_batch, action_batch)
 
         if updates % self.critic_target_update_frequency == 0:
             soft_update(self.critic_target, self.critic, self.critic_tau)
             soft_update(self.safety_critic_targets, self.safety_critics, self.critic_tau)
 
+        metrics = {}
+        metrics.update(critic_metrics)
+        metrics.update(actor_metrics)
+        metrics["train/reward_batch_mean"] = float(reward_batch.detach().mean().cpu().item())
+        metrics["train/cost_batch_mean"] = float(cost_batch.detach().mean().cpu().item())
+        metrics["train/bootstrap_mask_mean"] = float(mask_batch.detach().mean().cpu().item())
+        return metrics
+
     # Save model parameters
     def save_model(self, suffix="", actor_path=None, critics_path=None, safetycritics_path=None):
-        if not os.path.exists('models/'):
-            os.makedirs('models/')
-
         if actor_path is None:
-            actor_path = "models/actor_{}_{}".format(self.args.env_name, suffix)
-        if critics_path is None:
-            critics_path = "models/critics_{}_{}".format(self.args.env_name, suffix)
-        if safetycritics_path is None:
-            safetycritics_path = "models/safetycritics_{}_{}".format(self.args.env_name, suffix)
+            model_dir = "models/{}_{}/".format(self.args.env_name, self.args.experiment_name)
+            os.makedirs(model_dir, exist_ok=True)
+            actor_path = os.path.join(model_dir, "actor_{}".format(suffix))
+            critics_path = os.path.join(model_dir, "critics_{}".format(suffix))
+            safetycritics_path = os.path.join(model_dir, "safetycritics_{}".format(suffix))
+
         print('Saving models to {}, {}, and {}'.format(actor_path, critics_path, safetycritics_path))
         torch.save(self.policy.state_dict(), actor_path)
         torch.save(self.critic.state_dict(), critics_path)
         torch.save(self.safety_critics.state_dict(), safetycritics_path)
-
+    
     # Load model parameters
     def load_model(self, actor_path, critics_path, safetycritics_path):
         print('Loading models from {}, {}, and {}'.format(actor_path, critics_path, safetycritics_path))

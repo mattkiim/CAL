@@ -53,5 +53,38 @@ def readParser():
     parser.add_argument('--min_pool_size', type=int, default=1000)
     parser.add_argument('--max_train_repeat_per_step', type=int, default=5)
     parser.add_argument('--policy_train_batch_size', type=int, default=12)
+    parser.add_argument('--grad_clip_norm', type=float, default=10.0,
+                        help='Global grad norm clip for actor/critic updates. <=0 disables clipping.')
+    # ----- run more ----- #
+    parser.add_argument("--resume_dir", default=None,
+                        help="Directory to resume from, e.g. models/Quad2D_exp1")
+    parser.add_argument("--resume_suffix", default=None,
+                        help="Checkpoint suffix to resume from, e.g. 4921_epoch150. If omitted, picks latest.")
+
+    # ---------------------Quad3D Training Config--------------------
+    parser.add_argument("--quad3d_eval_interval", type=int, default=None,
+                        help="Evaluate Quad3D every N environment steps. Defaults to 2500 in main_quad3d.py.")
+    parser.add_argument("--quad3d_init_action_std", type=float, default=None,
+                        help="Stddev for near-hover Quad3D warmup actions. Defaults to 0.05 in main_quad3d.py.")
+    parser.add_argument("--quad3d_debug_eval", action="store_true", default=False,
+                        help="Print per-start Quad3D eval diagnostics.")
+    parser.add_argument("--quad3d_batch_size", type=int, default=None,
+                        help="Quad3D-specific policy batch size. Defaults to 256 when the generic default is unchanged.")
+    parser.add_argument("--quad3d_num_train_repeat", type=int, default=None,
+                        help="Quad3D-specific gradient updates per env step. Defaults to 2 when the generic default is unchanged.")
+    parser.add_argument("--quad3d_min_pool_size", type=int, default=None,
+                        help="Quad3D-specific minimum replay size before training. Defaults to 5000 when the generic default is unchanged.")
+
+    # ---------------------F16 Training Config--------------------
+    parser.add_argument("--f16_eval_interval", type=int, default=None,
+                        help="Evaluate F16 every N environment steps. Defaults to 500 in main_f16.py.")
+    parser.add_argument("--f16_init_action_std", type=float, default=None,
+                        help="Stddev for near-trim F16 warmup actions. Defaults to 0.05 in main_f16.py.")
+    parser.add_argument("--f16_batch_size", type=int, default=None,
+                        help="F16-specific policy batch size. Defaults to 256 when the generic default is unchanged.")
+    parser.add_argument("--f16_num_train_repeat", type=int, default=None,
+                        help="F16-specific gradient updates per env step. Defaults to 2 when the generic default is unchanged.")
+    parser.add_argument("--f16_min_pool_size", type=int, default=None,
+                        help="F16-specific minimum replay size before training. Defaults to 5000 when the generic default is unchanged.")
 
     return parser.parse_args()
